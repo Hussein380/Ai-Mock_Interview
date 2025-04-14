@@ -8,41 +8,49 @@ const SESSION_DURATION = 60 * 60 * 24 * 7;
 
 // Set session cookie
 export async function setSessionCookie(idToken: string) {
-  const cookieStore = await cookies();
+  try {
+    const cookieStore = await cookies();
 
-  // Create session cookie
-  const sessionCookie = await auth.createSessionCookie(idToken, {
-    expiresIn: SESSION_DURATION * 1000, // milliseconds
-  });
+    // Create session cookie first
+    const sessionCookie = await auth.createSessionCookie(idToken, {
+      expiresIn: SESSION_DURATION * 1000, // milliseconds
+    });
 
-  // Set cookie in the browser
-  cookieStore.set("session", sessionCookie, {
-    maxAge: SESSION_DURATION,
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    sameSite: "lax",
-  });
+    // Set cookie in the browser
+    cookieStore.set("session", sessionCookie, {
+      maxAge: SESSION_DURATION,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      sameSite: "lax",
+    });
+
+    // Verify the token after setting cookie
+    const decodedToken = await auth.verifyIdToken(idToken);
+    return decodedToken;
+  } catch (error: any) {
+    console.error("Error setting session cookie:", error);
+    
+    // Check for specific Firebase Auth errors
+    if (error.code === 'auth/invalid-id-token') {
+      throw new Error("Invalid authentication token. Please sign in again.");
+    } else if (error.code === 'auth/id-token-expired') {
+      throw new Error("Authentication token expired. Please sign in again.");
+    }
+    
+    throw error;
+  }
 }
 
 export async function signUp(params: SignUpParams) {
   const { uid, name, email } = params;
 
   try {
-    // check if user exists in db
-    const userRecord = await db.collection("users").doc(uid).get();
-    if (userRecord.exists)
-      return {
-        success: false,
-        message: "User already exists. Please sign in.",
-      };
-
-    // save user to db
+    // Create user document in Firestore
     await db.collection("users").doc(uid).set({
       name,
       email,
-      // profileURL,
-      // resumeURL,
+      createdAt: new Date().toISOString(),
     });
 
     return {
@@ -51,15 +59,6 @@ export async function signUp(params: SignUpParams) {
     };
   } catch (error: any) {
     console.error("Error creating user:", error);
-
-    // Handle Firebase specific errors
-    if (error.code === "auth/email-already-exists") {
-      return {
-        success: false,
-        message: "This email is already in use",
-      };
-    }
-
     return {
       success: false,
       message: "Failed to create account. Please try again.",
@@ -71,20 +70,28 @@ export async function signIn(params: SignInParams) {
   const { email, idToken } = params;
 
   try {
-    const userRecord = await auth.getUserByEmail(email);
-    if (!userRecord)
+    // First verify and set the session cookie
+    const decodedToken = await setSessionCookie(idToken);
+    
+    // Check if user exists in Firestore
+    const userDoc = await db.collection("users").doc(decodedToken.uid).get();
+    if (!userDoc.exists) {
       return {
         success: false,
-        message: "User does not exist. Create an account.",
+        message: "User account not found. Please sign up first.",
       };
+    }
 
-    await setSessionCookie(idToken);
+    return {
+      success: true,
+      message: "Signed in successfully",
+    };
   } catch (error: any) {
-    console.log("");
+    console.error("Sign in error:", error);
 
     return {
       success: false,
-      message: "Failed to log into account. Please try again.",
+      message: error.message || "Failed to log into account. Please try again.",
     };
   }
 }

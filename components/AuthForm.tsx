@@ -46,17 +46,18 @@ const AuthForm = ({ type }: { type: FormType }) => {
       if (type === "sign-up") {
         const { name, email, password } = data;
 
+        // First create the user in Firebase Auth
         const userCredential = await createUserWithEmailAndPassword(
           auth,
           email,
           password
         );
 
+        // Then create the user in our database
         const result = await signUp({
           uid: userCredential.user.uid,
           name: name!,
           email,
-          password,
         });
 
         if (!result.success) {
@@ -64,34 +65,79 @@ const AuthForm = ({ type }: { type: FormType }) => {
           return;
         }
 
-        toast.success("Account created successfully. Please sign in.");
+        toast.success(result.message);
         router.push("/sign-in");
       } else {
         const { email, password } = data;
 
-        const userCredential = await signInWithEmailAndPassword(
-          auth,
-          email,
-          password
-        );
+        try {
+          // First authenticate with Firebase
+          const userCredential = await signInWithEmailAndPassword(
+            auth,
+            email,
+            password
+          );
 
-        const idToken = await userCredential.user.getIdToken();
-        if (!idToken) {
-          toast.error("Sign in Failed. Please try again.");
-          return;
+          // Force refresh the token to ensure it's fresh
+          const idToken = await userCredential.user.getIdToken(true);
+          
+          // Then create the session
+          const result = await signIn({
+            email,
+            idToken,
+          });
+
+          if (!result.success) {
+            toast.error(result.message);
+            return;
+          }
+
+          toast.success(result.message);
+          router.refresh(); // Refresh to update auth state
+          router.push("/"); // Redirect to home
+        } catch (signInError: any) {
+          console.error("Sign in error:", signInError);
+          
+          // Handle specific Firebase Auth errors
+          switch (signInError.code) {
+            case 'auth/invalid-credential':
+            case 'auth/wrong-password':
+              toast.error("Invalid email or password. Please try again.");
+              break;
+            case 'auth/user-not-found':
+              toast.error("No account found with this email. Please sign up first.");
+              break;
+            case 'auth/invalid-email':
+              toast.error("Invalid email address.");
+              break;
+            case 'auth/too-many-requests':
+              toast.error("Too many failed attempts. Please try again later.");
+              break;
+            default:
+              toast.error("Failed to sign in. Please try again.");
+          }
         }
-
-        await signIn({
-          email,
-          idToken,
-        });
-
-        toast.success("Signed in successfully.");
-        router.push("/");
       }
-    } catch (error) {
-      console.log(error);
-      toast.error(`There was an error: ${error}`);
+    } catch (error: any) {
+      console.error("Auth error:", error);
+      
+      // Handle specific Firebase Auth errors for sign up
+      switch (error.code) {
+        case 'auth/email-already-in-use':
+          toast.error("An account with this email already exists. Please sign in instead.");
+          break;
+        case 'auth/invalid-email':
+          toast.error("Invalid email address.");
+          break;
+        case 'auth/weak-password':
+          toast.error("Password is too weak. Please use a stronger password.");
+          break;
+        case 'auth/network-request-failed':
+          toast.error("Network error. Please check your internet connection.");
+          break;
+        default:
+          toast.error("Failed to create account. Please try again.");
+      }
     }
   };
 
